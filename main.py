@@ -9,7 +9,6 @@ import os
 import boto3
 from botocore.client import Config
 from fastapi.middleware.cors import CORSMiddleware
-import shopify
 import ssl
 import requests
 import json
@@ -21,66 +20,61 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
-from dotenv import load_dotenv  #la función config de decouple para cargar variables de entorno
+from dotenv import load_dotenv
 
 ssl._create_default_https_context = ssl._create_unverified_context
-load_dotenv()
-DB_HOST = os.environ.get("DB_HOST")
-DB_USER = os.environ.get("DB_USER")
-DB_PASSWORD = os.environ.get("DB_PASSWORD")
-DB_NAME = os.environ.get("DB_NAME")
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
-AWS_REGION_NAME = os.environ.get("AWS_REGION_NAME")
-AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL")
-SECRET_KEY = os.environ.get("SECRET_KEY")
-SHOPIFY_API_TOKEN = os.environ.get("SHOPIFY_API_TOKEN")
-SHOPIFY_STORE_NAME = os.environ.get("SHOPIFY_STORE_NAME")
+
+# Al principio de tu archivo
+load_dotenv()  # Carga las variables de entorno del archivo .env
+
+# Para AWS
+aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+
+# Para la conexión a la base de datos
+db_host = os.getenv('DATABASE_HOST')
+db_port = os.getenv('DATABASE_PORT')
+db_user = os.getenv('DATABASE_USER')
+db_password = os.getenv('DATABASE_PASSWORD')
+db_name = os.getenv('DATABASE_NAME')
+
+# Creando la sesión de boto3 con las variables de entorno
+session = boto3.session.Session()
+client = session.client('s3',
+                        region_name='nyc3',
+                        endpoint_url='https://productos.nyc3.digitaloceanspaces.com',
+                        aws_access_key_id=aws_access_key_id,
+                        aws_secret_access_key=aws_secret_access_key)
+
+# Creando la conexión a la base de datos con las variables de entorno
+connection = mysql.connector.connect(
+    host=db_host,
+    port=db_port,
+    user=db_user,
+    password=db_password,
+    database=db_name
+)
 
 
 adjetivos_sabor_premium = [
     # En inglés
     "Rich", "Luxurious", "Exquisite", "Gourmet", "Velvety",
     "Decadent", "Opulent", "Sumptuous", "Divine", "Indulgent",
-
+    
     # En francés
     "Raffiné", "Luxueux", "Exquis", "Gourmand", "Onctueux",
     "Décadent", "Opulent", "Somptueux", "Divin", "Indulgent",
-
+    
     # En español
     "Delicioso", "Exquisito", "Sabroso", "Gourmet", "Suave",
     "Lujoso", "Aterciopelado", "Rico", "Delicado", "Suntuoso",
-
+    
     # Otros idiomas
     "Saporito", "Lecker", "Prelibato", "Buonissimo", "Delizioso",  # Italiano
     "Leckerbissen", "Erlesen", "Köstlich", "Wohlgeschmack", "Genussvoll",  # Alemán
     "Exquisito", "Saboroso", "Delicado", "Elegante", "Apetitoso",  # Portugués
 ]
-# Conexión a la Base de Datos utilizando variables de entorno
-connection = mysql.connector.connect(
-    host=DB_HOST,
-    port=3306,
-    user=DB_USER,
-    password=DB_PASSWORD,
-    database=DB_NAME,
-)
 
-# Configuración de AWS utilizando variables de entorno
-session = boto3.session.Session()
-client = session.client(
-    's3',
-    region_name=AWS_REGION_NAME,
-    endpoint_url=AWS_ENDPOINT_URL,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-)
-
-# Configuración de seguridad y tokens utilizando variables de entorno
-SECRET_KEY = SECRET_KEY
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 5259600
-
-# Modelos de Pydantic
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -95,6 +89,7 @@ class ProductListCheck(BaseModel):
     productos: List[ProductCheck]
     imagen: str  # Campo para la imagen en base64
 
+# Modelos de Pydantic
 class DataItem(BaseModel):
     id: int
     name: str
@@ -103,6 +98,8 @@ class DataItem(BaseModel):
     largo: float
     ancho: float
 
+
+
 class ProductData(BaseModel):
     title: str
     body_html: str
@@ -110,6 +107,11 @@ class ProductData(BaseModel):
     product_type: str
     status: str
     price: str
+
+# SECRET_KEY debería ser un string secreto largo y aleatorio
+SECRET_KEY = "tu_clave_secreta_aqui"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 5259600
 
 # Esta clase representa un usuario en tu sistema
 class User(BaseModel):
@@ -167,6 +169,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     return user
 
 # Configura CORS SOLO DEV!
+
+
 app = FastAPI()
 
 app.add_middleware(
@@ -176,10 +180,6 @@ app.add_middleware(
     allow_methods=["*"],  # Permite todos los métodos
     allow_headers=["*"],  # Permite todas las cabeceras
 )
-
-# ... Otros imports y configuraciones aquí ...
-
-# Endpoint para crear un elemento
 @app.post("/items/")
 async def create_item(name: str = Form(...), price: str = Form(...), category: str = Form(...), image: UploadFile = File(...), largo: int = Form(...), ancho: int = Form(...)):
     # Guardar temporalmente el archivo en el servidor
@@ -192,11 +192,11 @@ async def create_item(name: str = Form(...), price: str = Form(...), category: s
     with open(temp_file_path, 'rb') as file_data:
         client.upload_fileobj(
             Fileobj=file_data,
-            Bucket="productos",
+            Bucket='productos',
             Key=image.filename,
             ExtraArgs={'ACL': 'public-read'}   
         )
-    file_url = f"{AWS_ENDPOINT_URL}/{'productos'}/{image.filename}"
+    file_url = f"https://productos.nyc3.digitaloceanspaces.com/productos/{image.filename}"
 
     # Eliminar el archivo temporal
     os.remove(temp_file_path)
@@ -210,7 +210,7 @@ async def create_item(name: str = Form(...), price: str = Form(...), category: s
 
     return {"message": "Item created successfully", "image_url": file_url}
 
-# Endpoint para obtener un elemento por ID
+# Endpoints de la APi
 @app.get("/items/{item_id}")
 async def read_item(item_id: int):
     cursor = connection.cursor()
@@ -222,7 +222,8 @@ async def read_item(item_id: int):
     else:
         raise HTTPException(status_code=404, detail="Item not found")
 
-# Endpoint para obtener una lista de elementos con paginación
+from fastapi import UploadFile, File, Form
+
 @app.get("/items/")
 async def read_items(page: int = 1, limit: int = Query(10, gt=0)):
     offset = (page - 1) * limit
@@ -232,7 +233,6 @@ async def read_items(page: int = 1, limit: int = Query(10, gt=0)):
     cursor.close()
     return items
 
-# Endpoint para obtener una lista de cilindros con paginación
 @app.get("/cilindros/")
 async def read_items(page: int = 1, limit: int = Query(100, gt=0)):
     offset = (page - 1) * limit
@@ -242,7 +242,6 @@ async def read_items(page: int = 1, limit: int = Query(100, gt=0)):
     cursor.close()
     return items
 
-# Endpoint para obtener una lista de elementos por categoría
 @app.get("/items/category/{category}")
 async def read_items_by_category(category: str):
     cursor = connection.cursor()
@@ -254,8 +253,6 @@ async def read_items_by_category(category: str):
         return items
     else:
         raise HTTPException(status_code=404, detail="No items found in this category")
-
-# Endpoint para obtener una lista de categorías
 @app.get("/categories/")
 async def read_categories():
     cursor = connection.cursor()
@@ -264,7 +261,6 @@ async def read_categories():
     cursor.close()
     return [category[0] for category in categories]
 
-# Endpoint para actualizar un elemento por ID
 @app.put("/items/{item_id}")
 async def update_item(
     item_id: int,
@@ -273,7 +269,8 @@ async def update_item(
     category: str = Form(),
     image: UploadFile = File(None),  # Permitir que image sea None
     largo: float = Form(...),
-    ancho: float = Form(...)
+    ancho: float = Form(...), 
+    current_user: User = Depends(get_current_user)
 ):
     file_url = None  # Inicializa la URL de la imagen como None
 
@@ -289,11 +286,11 @@ async def update_item(
         with open(temp_file_path, 'rb') as file_data:
             client.upload_fileobj(
                 Fileobj=file_data,
-                Bucket="productos",
+                Bucket='productos',
                 Key=image.filename,
                 ExtraArgs={'ACL': 'public-read'}
             )
-        file_url = f"{AWS_ENDPOINT_URL}/{'productos'}/{image.filename}"
+        file_url = f"https://productos.nyc3.digitaloceanspaces.com/productos/{image.filename}"
 
         # Eliminar el archivo temporal
         os.remove(temp_file_path)
@@ -317,13 +314,17 @@ async def update_item(
         raise HTTPException(status_code=404, detail="Item not found")
     return {"message": "Item updated successfully"}
 
-# Endpoint para crear un pedido en Shopify
+import random
+
 @app.post("/create_shopify_order/")
 async def create_shopify_order(product_list: ProductListCheck, current_user: User = Depends(get_current_user)):
     cursor = connection.cursor()
     error_products = []
     total_price = 0
     product_counts = {}
+
+    shopify_access_token = os.getenv('SHOPIFY_ACCESS_TOKEN')
+    shopify_api_url = os.getenv('SHOPIFY_API_URL')
 
     # Procesamiento de los productos
     for product in product_list.productos:
@@ -370,9 +371,10 @@ async def create_shopify_order(product_list: ProductListCheck, current_user: Use
         }
     }
 
+    # Petición a la API de Shopify
     response = requests.post(
-        f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/2023-10/products.json",
-        headers={"X-Shopify-Access-Token": SHOPIFY_API_TOKEN, "Content-Type": "application/json"},
+        f"{shopify_api_url}/admin/api/2023-10/products.json",
+        headers={"X-Shopify-Access-Token": shopify_access_token, "Content-Type": "application/json"},
         data=json.dumps(shopify_product)
     )
 
@@ -381,8 +383,6 @@ async def create_shopify_order(product_list: ProductListCheck, current_user: Use
 
     return response.json()
 
-# .token
-""""
 @app.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(form_data.username, form_data.password)
@@ -397,9 +397,8 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
-"""
 
-
+# Otros endpoints y configuraciones...
 # Ejecución del Servidor (esto no se ejecutará si importas este archivo como un módulo)
 if __name__ == "__main__":
     import uvicorn
